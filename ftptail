@@ -1,0 +1,188 @@
+#! /usr/bin/perl -w
+
+# ftptail version 0.2
+# Copyright 2006 Will Moffat http://hamstersoup.com
+# This program is distributed under the terms of the GNU General Public License v.2 or later
+
+# Thanks to Sven | http://blog.bad-voegelsen.de for the bug reports
+
+# TODO: check if it's really necessary to have ftp->type in 3 places. Maybe one is enough after the ftp->login
+
+sub usage {
+    @_ && print "\n@_\n";
+    print '
+Usage: ftptail [OPTIONS] user@host/file
+Print the last 10 lines of file on an FTP server.
+
+Options:
+   -n, --lines=N            Print the last N lines of the file (default:10)
+   -f, --follow             Keep FTP connection open and append as file grows
+   -s, --sleep-interval=S   Sleep S seconds between updates    (default:200)
+   -p, --password-file=P    Use the password stored in P to login
+   -i, --inband-signaling   Highlight the start and end of each update
+   -v, --verbose            Dump info about FTP connection to STDERR
+
+';
+    exit 1;
+}
+
+use Net::FTP;
+use Getopt::Long;
+use File::Basename;
+use File::Temp qw/ :POSIX /;
+use Carp;
+use strict;
+
+my ($lines,$sleepInterval,$follow,$inbandSignaling,$verbose)=(10,0,0,0,0);
+my ($username,$host) = ("","");
+my ($dirname,$basename)=("","");
+my $passwd="";
+
+$| = 1; # turn on auto-flush for STDOUT
+
+&processCommandLine;
+
+my $tmpFileName = tmpnam();
+
+$verbose && warn "FTP $host\n";
+my $ftp=Net::FTP->new($host,Timeout=>240) || &quit("Cannot ftp to $host: $!");
+
+$verbose && warn "USER: $username \t PASS: ". '*'x length($passwd). "\n"; # hide password
+$ftp->login($username,$passwd) || &quit("Can't login to $host: $!");
+
+$verbose && warn "CWD: $dirname\n";
+$ftp->cwd($dirname) or &quit("Can't cd  $!");
+
+$lines && &getNlines;
+$follow && &follow; #this never terminates!
+
+$verbose && warn "QUIT\n";
+$ftp->quit;
+
+exit 0;
+
+################
+
+sub processCommandLine {
+    my $passwordFile="";
+    GetOptions ('n|lines=i'          => \$lines,
+		'f|follow'           => \$follow,
+		's|sleep-interval=i' => \$sleepInterval,
+		'p|password-file=s'  => \$passwordFile,
+		'i|inband-signaling' => \$inbandSignaling,
+		'v|verbose'          => \$verbose) || &usage;
+    
+    my $url = shift @ARGV || &usage('You must specify a URL to tail. Example: will@hamstersoup.com/robots.txt');
+    $url =~ /([^@]+)\@([^\/]+)\/(.+)/ || die "Malformed URL? Cannot extract user\@host/file from $url. user=[$1] host=[$2] file=[$3]\n";
+    my $file="";
+    ($username,$host,$file)=($1,$2,$3);
+    
+    fileparse_set_fstype(); # FTP uses UNIX rules
+    ($dirname,$basename)=(dirname($file),basename($file));
+    
+    if ($sleepInterval && !$follow)          { die "sleep-interval only makes sense if --follow is specified\n"; }
+    if ($follow && !$sleepInterval) { $sleepInterval = 200; } #default
+    
+    if ($passwordFile) {
+	open(PASSWD,"$passwordFile") || die "Cannot read password-file $passwordFile\n";
+	$passwd = <PASSWD> || die "First line of password file $passwordFile is empty\n";
+	chomp($passwd);
+	close(PASSWD);
+    }
+}
+
+################
+
+sub getNlines {
+    my $bytes = ($lines+1) * 120; # guess how many bytes we have to download to get N lines
+
+    my $keepGoing;
+    my @data;
+    my $length;
+    do {
+	my $actualBytes = &getNchars($bytes);
+	open(FILE,$tmpFileName) || &quit("Could not open $tmpFileName");
+	@data = <FILE>;
+	close(FILE);
+	unlink($tmpFileName);
+	
+	$length = $#data;
+	
+	$keepGoing = ($length<=$lines && $actualBytes==$bytes); #we want to download one extra line (to avoid truncation)
+	$bytes = $bytes * 2; # get more bytes this time. TODO: could calculate average line length and use that
+    } while ($keepGoing);
+
+    $inbandSignaling && print "#START: (This is a hack to signal start of data in pipe)\n";
+    # just print the last N lines
+    my $startLine = $length-$lines;
+    if ($startLine<0) { $startLine=0; }
+    for (my $i=$startLine+1; $i<=$length; $i++) { # skip the first line, it will probably be truncated
+	print $data[$i];
+    }
+    $inbandSignaling && print "#END: (This is a hack to signal end of data in pipe)\n";
+    $inbandSignaling && &flushPipe;
+}
+
+
+# > ulimit -all
+# ...
+# pipe size          (512 bytes, -p) 8
+# ...
+sub flushPipe {
+    print " "x(512*8);
+    print "\n";
+}
+
+# get N bytes and store in tempfile, return number of bytes downloaded
+sub getNchars {
+    my ($bytes) = @_;
+    my $type = $ftp->binary;
+    my $size = $ftp->size($basename) || &quit("ERROR: $dirname/$basename does not exist or is empty\n");
+    my $startPos = $size - $bytes;
+    if ($startPos<0) { $startPos=0; $bytes=$size; } #file is smaller than requested number of bytes
+    -e $tmpFileName && &quit("$tmpFileName exists");
+
+    $verbose && warn "GET: $basename, $tmpFileName, $startPos\n";
+    $ftp->get($basename,$tmpFileName,$startPos);
+    
+    return $bytes;
+}
+
+#############
+
+sub follow {
+    my $type = $ftp->binary;
+    my $lastEnd = $ftp->size($basename) || &quit("ERROR: $dirname/$basename does not exist or is empty\n");
+    $verbose && warn "SIZE $basename: ".$lastEnd." bytes\n";
+    
+    while(1) {
+	$verbose && print "sleeping ${sleepInterval}s ...\n";
+	sleep($sleepInterval);
+	my $type = $ftp->binary;
+	my $currentEnd = $ftp->size($basename) || &quit("ERROR: $dirname/$basename does not exist or is empty\n");
+	if ($currentEnd > $lastEnd) {
+	    $verbose && warn "SIZE $basename increased: ".($currentEnd-$lastEnd)." bytes\n";
+	    $verbose && warn "GET: $basename, $tmpFileName, $lastEnd\n";	    
+	    -e $tmpFileName && &quit("$tmpFileName exists");
+	    $ftp->get($basename,$tmpFileName,$lastEnd);
+	    open(FILE,$tmpFileName) || &quit("Could not open $tmpFileName");
+	    $inbandSignaling && print "#START: (This is a hack to signal start of data in pipe)\n";
+	    while (<FILE>) { print; }
+	    close(FILE);
+	    $inbandSignaling && print "#END: (This is a hack to signal end of data in pipe)\n";
+	    $inbandSignaling && &flushPipe;
+	    unlink($tmpFileName);	    
+	    $lastEnd = $currentEnd;
+	} else {
+	    print STDERR ".";
+	}
+    }
+}
+
+###############
+
+sub quit {
+    -e $tmpFileName && unlink($tmpFileName);
+    $ftp->quit;
+    croak "@_\n";
+}
