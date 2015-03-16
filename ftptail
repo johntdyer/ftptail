@@ -173,6 +173,9 @@ sub follow {
             $inbandSignaling && &flushPipe;
             unlink($tmpFileName);
             $lastEnd = $currentEnd;
+        } elsif ($currentEnd < $lastEnd) {
+            print STDERR "File shrunk, rewinding\n";
+            $lastEnd = 0;
         } else {
             print STDERR ".";
         }
