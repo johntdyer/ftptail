@@ -66,28 +66,28 @@ exit 0;
 sub processCommandLine {
     my $passwordFile="";
     GetOptions ('n|lines=i'          => \$lines,
-		'f|follow'           => \$follow,
-		's|sleep-interval=i' => \$sleepInterval,
-		'p|password-file=s'  => \$passwordFile,
-		'i|inband-signaling' => \$inbandSignaling,
-		'v|verbose'          => \$verbose) || &usage;
-    
+        'f|follow'           => \$follow,
+        's|sleep-interval=i' => \$sleepInterval,
+        'p|password-file=s'  => \$passwordFile,
+        'i|inband-signaling' => \$inbandSignaling,
+        'v|verbose'          => \$verbose) || &usage;
+
     my $url = shift @ARGV || &usage('You must specify a URL to tail. Example: will@hamstersoup.com/robots.txt');
     $url =~ /([^@]+)\@([^\/]+)\/(.+)/ || die "Malformed URL? Cannot extract user\@host/file from $url. user=[$1] host=[$2] file=[$3]\n";
     my $file="";
     ($username,$host,$file)=($1,$2,$3);
-    
+
     fileparse_set_fstype(); # FTP uses UNIX rules
     ($dirname,$basename)=(dirname($file),basename($file));
-    
-    if ($sleepInterval && !$follow)          { die "sleep-interval only makes sense if --follow is specified\n"; }
+
+    if ($sleepInterval && !$follow) { die "sleep-interval only makes sense if --follow is specified\n"; }
     if ($follow && !$sleepInterval) { $sleepInterval = 200; } #default
-    
+
     if ($passwordFile) {
-	open(PASSWD,"$passwordFile") || die "Cannot read password-file $passwordFile\n";
-	$passwd = <PASSWD> || die "First line of password file $passwordFile is empty\n";
-	chomp($passwd);
-	close(PASSWD);
+        open(PASSWD,"$passwordFile") || die "Cannot read password-file $passwordFile\n";
+        $passwd = <PASSWD> || die "First line of password file $passwordFile is empty\n";
+        chomp($passwd);
+        close(PASSWD);
     }
 }
 
@@ -100,16 +100,16 @@ sub getNlines {
     my @data;
     my $length;
     do {
-	my $actualBytes = &getNchars($bytes);
-	open(FILE,$tmpFileName) || &quit("Could not open $tmpFileName");
-	@data = <FILE>;
-	close(FILE);
-	unlink($tmpFileName);
-	
-	$length = $#data;
-	
-	$keepGoing = ($length<=$lines && $actualBytes==$bytes); #we want to download one extra line (to avoid truncation)
-	$bytes = $bytes * 2; # get more bytes this time. TODO: could calculate average line length and use that
+        my $actualBytes = &getNchars($bytes);
+        open(FILE,$tmpFileName) || &quit("Could not open $tmpFileName");
+        @data = <FILE>;
+        close(FILE);
+        unlink($tmpFileName);
+
+        $length = $#data;
+
+        $keepGoing = ($length<=$lines && $actualBytes==$bytes); #we want to download one extra line (to avoid truncation)
+        $bytes = $bytes * 2; # get more bytes this time. TODO: could calculate average line length and use that
     } while ($keepGoing);
 
     $inbandSignaling && print "#START: (This is a hack to signal start of data in pipe)\n";
@@ -117,7 +117,7 @@ sub getNlines {
     my $startLine = $length-$lines;
     if ($startLine<0) { $startLine=0; }
     for (my $i=$startLine+1; $i<=$length; $i++) { # skip the first line, it will probably be truncated
-	print $data[$i];
+        print $data[$i];
     }
     $inbandSignaling && print "#END: (This is a hack to signal end of data in pipe)\n";
     $inbandSignaling && &flushPipe;
@@ -144,7 +144,7 @@ sub getNchars {
 
     $verbose && warn "GET: $basename, $tmpFileName, $startPos\n";
     $ftp->get($basename,$tmpFileName,$startPos);
-    
+
     return $bytes;
 }
 
@@ -154,28 +154,31 @@ sub follow {
     my $type = $ftp->binary;
     my $lastEnd = $ftp->size($basename) || &quit("ERROR: $dirname/$basename does not exist or is empty\n");
     $verbose && warn "SIZE $basename: ".$lastEnd." bytes\n";
-    
+
     while(1) {
-	$verbose && print "sleeping ${sleepInterval}s ...\n";
-	sleep($sleepInterval);
-	my $type = $ftp->binary;
-	my $currentEnd = $ftp->size($basename) || &quit("ERROR: $dirname/$basename does not exist or is empty\n");
-	if ($currentEnd > $lastEnd) {
-	    $verbose && warn "SIZE $basename increased: ".($currentEnd-$lastEnd)." bytes\n";
-	    $verbose && warn "GET: $basename, $tmpFileName, $lastEnd\n";	    
-	    -e $tmpFileName && &quit("$tmpFileName exists");
-	    $ftp->get($basename,$tmpFileName,$lastEnd);
-	    open(FILE,$tmpFileName) || &quit("Could not open $tmpFileName");
-	    $inbandSignaling && print "#START: (This is a hack to signal start of data in pipe)\n";
-	    while (<FILE>) { print; }
-	    close(FILE);
-	    $inbandSignaling && print "#END: (This is a hack to signal end of data in pipe)\n";
-	    $inbandSignaling && &flushPipe;
-	    unlink($tmpFileName);	    
-	    $lastEnd = $currentEnd;
-	} else {
-	    print STDERR ".";
-	}
+        $verbose && print "sleeping ${sleepInterval}s ...\n";
+        sleep($sleepInterval);
+        my $type = $ftp->binary;
+        my $currentEnd = $ftp->size($basename) || &quit("ERROR: $dirname/$basename does not exist or is empty\n");
+        if ($currentEnd > $lastEnd) {
+            $verbose && warn "SIZE $basename increased: ".($currentEnd-$lastEnd)." bytes\n";
+            $verbose && warn "GET: $basename, $tmpFileName, $lastEnd\n";
+            -e $tmpFileName && &quit("$tmpFileName exists");
+            $ftp->get($basename,$tmpFileName,$lastEnd);
+            open(FILE,$tmpFileName) || &quit("Could not open $tmpFileName");
+            $inbandSignaling && print "#START: (This is a hack to signal start of data in pipe)\n";
+            while (<FILE>) { print; }
+            close(FILE);
+            $inbandSignaling && print "#END: (This is a hack to signal end of data in pipe)\n";
+            $inbandSignaling && &flushPipe;
+            unlink($tmpFileName);
+            $lastEnd = $currentEnd;
+        } elsif ($currentEnd < $lastEnd) {
+            print STDERR "File shrunk, rewinding\n";
+            $lastEnd = 0;
+        } else {
+            print STDERR ".";
+        }
     }
 }
 
