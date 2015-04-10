@@ -11,14 +11,14 @@
 sub usage {
     @_ && print "\n@_\n";
     print '
-Usage: ftptail [OPTIONS] user@host/file
+Usage: ftptail [OPTIONS] user@host[:port]/file
 Print the last 10 lines of file on an FTP server.
 
 Options:
    -n, --lines=N            Print the last N lines of the file (default:10)
    -f, --follow             Keep FTP connection open and append as file grows
    -s, --sleep-interval=S   Sleep S seconds between updates    (default:200)
-   -p, --password-file=P    Use the password stored in P to login
+   -p, --password-file=P    Use the password stored in P to login (except if P equals 'prompt')
    -i, --inband-signaling   Highlight the start and end of each update
    -v, --verbose            Dump info about FTP connection to STDERR
 
@@ -31,10 +31,11 @@ use Getopt::Long;
 use File::Basename;
 use File::Temp qw/ :POSIX /;
 use Carp;
+use Term::ReadKey;
 use strict;
 
 my ($lines,$sleepInterval,$follow,$inbandSignaling,$verbose)=(10,0,0,0,0);
-my ($username,$host) = ("","");
+my ($username,$host,$port) = ("","",21);
 my ($dirname,$basename)=("","");
 my $passwd="";
 
@@ -45,7 +46,7 @@ $| = 1; # turn on auto-flush for STDOUT
 my $tmpFileName = tmpnam();
 
 $verbose && warn "FTP $host\n";
-my $ftp=Net::FTP->new($host,Timeout=>240) || &quit("Cannot ftp to $host: $!");
+my $ftp=Net::FTP->new($host,Timeout=>240,Port=>$port) || &quit("Cannot ftp to $host: $!");
 
 $verbose && warn "USER: $username \t PASS: ". '*'x length($passwd). "\n"; # hide password
 $ftp->login($username,$passwd) || &quit("Can't login to $host: $!");
@@ -76,6 +77,7 @@ sub processCommandLine {
     $url =~ /([^@]+)\@([^\/]+)\/(.+)/ || die "Malformed URL? Cannot extract user\@host/file from $url. user=[$1] host=[$2] file=[$3]\n";
     my $file="";
     ($username,$host,$file)=($1,$2,$3);
+    if ($host =~ /^([^:]+):(.*)$/) { ($host,$port)=($1,$2); }
 
     fileparse_set_fstype(); # FTP uses UNIX rules
     ($dirname,$basename)=(dirname($file),basename($file));
@@ -83,7 +85,12 @@ sub processCommandLine {
     if ($sleepInterval && !$follow) { die "sleep-interval only makes sense if --follow is specified\n"; }
     if ($follow && !$sleepInterval) { $sleepInterval = 200; } #default
 
-    if ($passwordFile) {
+    if ($passwordFile eq 'prompt') {
+        print "password:\n";
+        ReadMode('noecho');
+        chomp($passwd = <STDIN>);
+        ReadMode(0);
+    } elsif ($passwordFile) {
         open(PASSWD,"$passwordFile") || die "Cannot read password-file $passwordFile\n";
         $passwd = <PASSWD> || die "First line of password file $passwordFile is empty\n";
         chomp($passwd);
