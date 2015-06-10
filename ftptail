@@ -18,7 +18,7 @@ Options:
    -n, --lines=N            Print the last N lines of the file (default:10)
    -f, --follow             Keep FTP connection open and append as file grows
    -s, --sleep-interval=S   Sleep S seconds between updates    (default:200)
-   -p, --password-file=P    Use the password stored in P to login (except if P equals 'prompt')
+   -p, --password-file=P    Use the password stored in P to login (except if P equals \'prompt\')
    -i, --inband-signaling   Highlight the start and end of each update
    -v, --verbose            Dump info about FTP connection to STDERR
 
